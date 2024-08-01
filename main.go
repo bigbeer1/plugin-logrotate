@@ -22,7 +22,7 @@ type FileInfo struct {
 type LogRotateConfig struct {
 	Path        string `default:"./logs" desc:"日志文件存放目录"`
 	Size        int64  `desc:"日志文件大小，单位：字节"`
-	Days        int    `default:"1" desc:"日志文件保留天数"`
+	Days        int    `default:"3" desc:"日志文件保留天数"`
 	Formatter   string `default:"2006-01-02T15" desc:"日志文件名格式"`
 	file        *os.File
 	currentSize int64
@@ -31,7 +31,7 @@ type LogRotateConfig struct {
 	splitFunc   func() bool
 }
 
-var _ = InstallPlugin(&LogRotateConfig{})
+var LogRotatePlugin = InstallPlugin(&LogRotateConfig{})
 
 func (config *LogRotateConfig) OnEvent(event any) {
 	switch event.(type) {
@@ -58,6 +58,16 @@ func (config *LogRotateConfig) OnEvent(event any) {
 		} else {
 			log.Error(err)
 		}
+
+		go func() {
+			for {
+				err := DeleteLog(config.Path, config.Days)
+				if err != nil {
+					LogRotatePlugin.Error(err.Error())
+				}
+				time.Sleep(time.Minute * 30)
+			}
+		}()
 	}
 }
 
@@ -131,4 +141,33 @@ func (l *LogRotateConfig) API_open(w http.ResponseWriter, r *http.Request) {
 	} else {
 		ReturnOK(w, r)
 	}
+}
+
+func DeleteLog(path string, day int) error {
+	maxAge := time.Duration(day) * 24 * time.Hour
+
+	cutOffTime := time.Now().Add(-maxAge)
+
+	if path == "" {
+		dir, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("Error getting working directory:%s", err)
+		}
+		path = filepath.Join(dir, "/logs")
+	}
+
+	return filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && info.ModTime().Before(cutOffTime) {
+			err := os.Remove(path)
+			if err != nil {
+				return err
+			}
+			LogRotatePlugin.Info(path + "日志文件删除成功")
+		}
+		return nil
+	})
+
 }
